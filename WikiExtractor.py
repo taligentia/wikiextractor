@@ -535,14 +535,17 @@ class Extractor(object):
         self.magicWords['CURRENTHOUR'] = time.strftime('%H')
         self.magicWords['CURRENTTIME'] = time.strftime('%H:%M:%S')
         text = self.text
-        self.text = ''          # save memory
-        #
+        self.text = ''       
+        #text = 'Le fils de [[W:Mouammar Kadhafi|Mouammar Kadhafi]] s\'était alors engagé à utiliser cette somme à des fins humanitaires. Les sites Internet d\'information du {{w|Gouvernement fédéral des États-Unis|gouvernement américain}} {{VOA News}} ont été victimes d\'une attaque informatique dans la nuit de mardi à mercredi.'   # save memory
+        #text = text + 'Pour {{CNN}}, les hackers&lt;ref&gt;Pirates informatiques.&lt;/ref&gt; réagissent après que la {{w|secrétaire d\'État américaine}} {{w|Hillary Rodham Clinton|Hillary Clinton}} se fut exprimée à de nombreuses reprises ces dernières semaines pour soutenir les {{w|Protestations dans les pays arabes de 2010-2011|mouvements de contestation dans le monde arabe}} et défendre une conception d\'Internet {{Citation1|libre mais surveillé}}. {{Citation1|Mme Clinton, vous voulez entendre la voix des opprimés depuis les États-Unis ? Le monde islamique ne croit pas aux mensonges américains}}, explique le texte en mauvais anglais. {{Citation1|Nous vous demandons de cesser d\'intervenir dans les affaires des pays musulmans}}, pouvait-on lire sur la page redirigée&lt;ref&gt;[http://media.voanews.com/images/480*338/VOA_hacked_image_22Feb11.jpg Voir une capture d\'écran].&lt;/ref&gt;.'#
+        
         # @see https://doc.wikimedia.org/mediawiki-core/master/php/classParser.html
         # This does the equivalent of internalParse():
         #
         # $dom = $this->preprocessToDom( $text, $flag );
         # $text = $frame->expand( $dom );
         #
+        text = self.preTransform(text)
         text = self.transform(text)
         text = self.wiki2text(text)
 
@@ -593,6 +596,11 @@ class Extractor(object):
         else:
             # Drop transclusions (template, parser functions)
             return dropNested(text, r'{{', r'}}')
+
+    def preTransform(self, text):
+        """Transform text not containing <nowiki>"""
+        return self.preExpand(text)
+    
 
     def wiki2text(self, text):
         #
@@ -758,6 +766,19 @@ class Extractor(object):
         # logging.debug('%*sexpand> %s', self.frame.depth, '', res)
         return res
 
+    def preExpand(self, wikitext):
+
+        res = ''
+        cur = 0
+        # look for matching {{...}}
+        for s, e in findMatchingBraces(wikitext, 2):
+            res += wikitext[cur:s] + self.preExpandTemplate(wikitext[s + 2:e - 2])
+            cur = e
+        # leftover
+        res += wikitext[cur:]
+        # logging.debug('%*sexpand> %s', self.frame.depth, '', res)
+        return res
+    
     def templateParams(self, parameters):
         """
         Build a dictionary with positional or name key to expanded parameters.
@@ -825,6 +846,33 @@ class Extractor(object):
                 templateParams[str(unnamedParameterCounter)] = param
         # logging.debug('%*stemplateParams> %s', self.frame.length, '', '|'.join(templateParams.values()))
         return templateParams
+
+
+    def preExpandTemplate(self, body):
+        parts = splitParts(body)
+        # title is the portion before the first |
+        title = parts[0].strip()
+        #title = self.expand(title)
+        
+        if len(parts) == 1:
+            #print "+++ " + title
+            return title
+
+        if title.lower() in ['w']:
+            if len(parts) == 2:
+                return parts[1].strip()
+            if len(parts) == 3:
+                return parts[2].strip()
+            return ''
+        
+        if title.lower() in ['citation', 'citation1']:
+            if len(parts) != 2:
+                return ''
+            return parts[1].strip()
+            
+        #print "--- " + title
+        return ''
+    
 
     def expandTemplate(self, body):
         """Expands template invocation.
@@ -2266,12 +2314,12 @@ def replaceInternalLinks(text):
 
 def makeInternalLink(title, label):
     colon = title.find(':')
-    if colon > 0 and title[:colon] not in acceptedNamespaces:
+    if colon > 0 and title[:colon].lower() not in acceptedNamespaces:
         return ''
     if colon == 0:
         # drop also :File:
         colon2 = title.find(':', colon + 1)
-        if colon2 > 1 and title[colon + 1:colon2] not in acceptedNamespaces:
+        if colon2 > 1 and title[colon + 1:colon2].lower() not in acceptedNamespaces:
             return ''
     if Extractor.keepLinks:
         return '<a href="%s">%s</a>' % (quote(title.encode('utf-8')), label)
@@ -2754,6 +2802,9 @@ def process_dump(input_file, template_file, out_file, file_size, file_compress,
     # Parallel Map/Reduce:
     # - pages to be processed are dispatched to workers
     # - a reduce process collects the results, sort them and print them.
+
+    # DBe
+    #process_count = 1
 
     maxsize = 10 * process_count
     # output queue
